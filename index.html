@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            background-color: #f0f2f5;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 15px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(5, 60px);
+            grid-gap: 4px;
+            background-color: #34495e;
+            padding: 4px;
+            border-radius: 10px;
+        }
+        .square {
+            width: 60px;
+            height: 60px;
+            background-color: #ecf0f1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .top-rect, .bottom-rect {
+            width: 320px;
+            height: 60px;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            background-color: #8d5524;
+            border-radius: 10px;
+        }
+        .stone {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        .top-stone { background-color: #3498db; }
+        .bottom-stone { background-color: #2c3e50; }
+        .highlight { background-color: #b2bec3; }
+        .selected { border: 2px solid #f1c40f; }
+        .score, #timer, #current-player {
+            font-size: 18px;
+            color: #2d3436;
+        }
+        .button-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            width: 100%;
+        }
+        button, input {
+            padding: 10px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            color: white;
+        }
+        #create-game { background-color: #27ae60; }
+        #join-game { background-color: #3498db; }
+        #extra-turn-blue { background-color: #3498db; }
+        #extra-turn-gray { background-color: #2c3e50; }
+        #surrender { background-color: #e74c3c; }
+        #reset-game { background-color: #27ae60; }
+        #new-round { background-color: #f39c12; }
+        #eat-stone { background-color: #8e44ad; }
+        #game-id { color: black; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="score">Blue Wins: <span id="blue-wins">0</span></div>
+        <div class="top-rect" id="topRect"></div>
+        <div class="grid" id="grid"></div>
+        <div class="bottom-rect" id="bottomRect"></div>
+        <div class="score">Gray Wins: <span id="gray-wins">0</span></div>
+        <div id="timer">Time: --</div>
+        <div id="current-player">Placement Phase</div>
+        <div class="button-container">
+            <button id="create-game">Create Game</button>
+            <button id="join-game">Join Game</button>
+            <input id="game-id" placeholder="Enter Game ID" />
+            <button id="extra-turn-blue">Extra Turn (Blue)</button>
+            <button id="extra-turn-gray">Extra Turn (Gray)</button>
+            <button id="surrender">Surrender</button>
+            <button id="reset-game">Reset Game</button>
+            <button id="new-round">New Round</button>
+            <button id="eat-stone">Eat Stone</button>
+        </div>
+    </div>
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database.js"></script>
+    <script>
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            databaseURL: "YOUR_DATABASE_URL",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        const grid = document.getElementById('grid');
+        for (let i = 0; i < 25; i++) {
+            const square = document.createElement('div');
+            square.className = 'square';
+            square.dataset.index = i;
+            grid.appendChild(square);
+        }
+
+        const topRect = document.getElementById('topRect');
+        const bottomRect = document.getElementById('bottomRect');
+        let gameId = null, playerId = null, selectedStone = null;
+        let gridStones = new Array(25).fill(false);
+        let topStonesPlaced = 0, bottomStonesPlaced = 0, gameStarted = false;
+        let currentPlayer = 'top', timeLeft = 30, blueWins = 0, grayWins = 0;
+        let eatMode = false, timerInterval;
+
+        function initializeStones() {
+            topRect.innerHTML = bottomRect.innerHTML = '';
+            for (let i = 0; i < 12; i++) {
+                const topStone = document.createElement('div');
+                const bottomStone = document.createElement('div');
+                topStone.className = 'stone top-stone';
+                bottomStone.className = 'stone bottom-stone';
+                topRect.appendChild(topStone);
+                bottomRect.appendChild(bottomStone);
+                topStone.addEventListener('click', handleStoneSelection);
+                bottomStone.addEventListener('click', handleStoneSelection);
+            }
+        }
+        initializeStones();
+
+        document.getElementById('create-game').addEventListener('click', () => {
+            gameId = Math.random().toString(36).substring(2, 8);
+            playerId = 'player1';
+            resetGameState();
+            db.ref('games/' + gameId).set({
+                state: { gridStones, topStonesPlaced, bottomStonesPlaced, gameStarted, currentPlayer, timeLeft, blueWins, grayWins },
+                players: { player1: 'Blue' }
+            });
+            alert(`Game ID: ${gameId}`);
+            startGame();
+        });
+
+        document.getElementById('join-game').addEventListener('click', () => {
+            gameId = document.getElementById('game-id').value;
+            db.ref('games/' + gameId).once('value', snapshot => {
+                if (snapshot.exists() && !snapshot.val().players.player2) {
+                    playerId = 'player2';
+                    db.ref('games/' + gameId + '/players').update({ player2: 'Gray' });
+                    startGame();
+                } else {
+                    alert('Invalid or full game!');
+                }
+            });
+        });
+
+        function startGame() {
+            db.ref('games/' + gameId + '/state').on('value', snapshot => {
+                const state = snapshot.val();
+                gridStones = state.gridStones;
+                topStonesPlaced = state.topStonesPlaced;
+                bottomStonesPlaced = state.bottomStonesPlaced;
+                gameStarted = state.gameStarted;
+                currentPlayer = state.currentPlayer;
+                timeLeft = state.timeLeft;
+                blueWins = state.blueWins;
+                grayWins = state.grayWins;
+
+                document.getElementById('blue-wins').textContent = blueWins;
+                document.getElementById('gray-wins').textContent = grayWins;
+                document.getElementById('timer').textContent = `Time: ${timeLeft}`;
+                document.getElementById('current-player').textContent = 
+                    gameStarted ? `Current: ${currentPlayer === 'top' ? 'Blue' : 'Gray'}` : 'Placement Phase';
+
+                for (let i = 0; i < 25; i++) {
+                    const square = grid.children[i];
+                    square.innerHTML = gridStones[i] ? 
+                        `<div class="stone ${i < topStonesPlaced ? 'top-stone' : 'bottom-stone'}"></div>` : '';
+                }
+                if (gameStarted && playerId === 'player1' && currentPlayer === 'top') startTimer();
+                if (gameStarted && playerId === 'player2' && currentPlayer === 'bottom') startTimer();
+            });
+        }
+
+        function updateGameState() {
+            db.ref('games/' + gameId + '/state').update({
+                gridStones, topStonesPlaced, bottomStonesPlaced, gameStarted, currentPlayer, timeLeft, blueWins, grayWins
+            });
+        }
+
+        function handleStoneSelection() {
+            if (!gameId || (playerId === 'player1' && currentPlayer !== 'top') || 
+                (playerId === 'player2' && currentPlayer !== 'bottom')) return;
+            if (selectedStone) selectedStone.classList.remove('selected');
+            if (!gameStarted && (topRect.contains(this) || bottomRect.contains(this))) {
+                selectedStone = this;
+                this.classList.add('selected');
+            }
+        }
+
+        grid.addEventListener('click', e => {
+            const square = e.target.closest('.square');
+            if (!square || !gameId || (playerId === 'player1' && currentPlayer !== 'top') || 
+                (playerId === 'player2' && currentPlayer !== 'bottom')) return;
+
+            const index = parseInt(square.dataset.index);
+            if (!gameStarted && selectedStone && !gridStones[index]) {
+                gridStones[index] = true;
+                if (selectedStone.classList.contains('top-stone')) topStonesPlaced++;
+                else bottomStonesPlaced++;
+                selectedStone.remove();
+                selectedStone = null;
+                if (topStonesPlaced === 12 && bottomStonesPlaced === 12) {
+                    gameStarted = true;
+                    currentPlayer = 'top';
+                    startTimer();
+                }
+                updateGameState();
+            } else if (gameStarted && square.querySelector('.stone') && !eatMode) {
+                const stone = square.querySelector('.stone');
+                if ((currentPlayer === 'top' && stone.classList.contains('top-stone')) ||
+                    (currentPlayer === 'bottom' && stone.classList.contains('bottom-stone'))) {
+                    handleGridStoneClick(square, index);
+                }
+            } else if (gameStarted && square.classList.contains('highlight')) {
+                moveStone(index, parseInt(square.dataset.source));
+            } else if (gameStarted && eatMode && square.querySelector('.stone')) {
+                eatStone(index);
+            }
+        });
+
+        function handleGridStoneClick(square, index) {
+            clearHighlights();
+            const row = Math.floor(index / 5), col = index % 5;
+            const directions = [{r:-1,c:0},{r:1,c:0},{r:0,c:-1},{r:0,c:1}];
+            directions.forEach(dir => {
+                const newRow = row + dir.r, newCol = col + dir.c;
+                if (newRow >= 0 && newRow < 5 && newCol >= 0 && newCol < 5) {
+                    const newIndex = newRow * 5 + newCol;
+                    if (!grid.children[newIndex].querySelector('.stone')) {
+                        grid.children[newIndex].classList.add('highlight');
+                        grid.children[newIndex].dataset.source = index;
+                    }
+                }
+            });
+            square.querySelector('.stone').classList.add('selected');
+            selectedStone = square.querySelector('.stone');
+        }
+
+        function moveStone(targetIndex, sourceIndex) {
+            gridStones[sourceIndex] = false;
+            gridStones[targetIndex] = true;
+            clearHighlights();
+            selectedStone = null;
+            const captured = checkCapture(targetIndex);
+            updateGameState();
+            if (!captured) switchPlayer();
+            if (!hasStonesOnGrid('top')) endGame('Gray');
+            else if (!hasStonesOnGrid('bottom')) endGame('Blue');
+        }
+
+        function checkCapture(targetIndex) {
+            const stone = grid.children[targetIndex].querySelector('.stone');
+            const isTopStone = stone.classList.contains('top-stone');
+            const row = Math.floor(targetIndex / 5), col = targetIndex % 5;
+            let captured = false;
+            const directions = [
+                {r:0,c:-1,check:col>1},{r:0,c:1,check:col<3},
+                {r:-1,c:0,check:row>1},{r:1,c:0,check:row<3}
+            ];
+            directions.forEach(dir => {
+                if (dir.check) {
+                    const adjIndex = targetIndex + (dir.r * 5) + dir.c;
+                    const adjStone = grid.children[adjIndex].querySelector('.stone');
+                    if (adjStone && adjStone.classList.contains(isTopStone ? 'bottom-stone' : 'top-stone')) {
+                        const farIndex = adjIndex + (dir.r * 5) + dir.c;
+                        if (farIndex >= 0 && farIndex < 25 && grid.children[farIndex].querySelector('.stone')?.classList.contains(isTopStone ? 'top-stone' : 'bottom-stone')) {
+                            gridStones[adjIndex] = false;
+                            const capturedStone = adjStone.cloneNode(true);
+                            adjStone.remove();
+                            if (capturedStone.classList.contains('top-stone')) topRect.appendChild(capturedStone);
+                            else bottomRect.appendChild(capturedStone);
+                            captured = true;
+                        }
+                    }
+                }
+            });
+            return captured;
+        }
+
+        function eatStone(index) {
+            const stone = grid.children[index].querySelector('.stone');
+            gridStones[index] = false;
+            if (stone.classList.contains('top-stone')) topRect.appendChild(stone.cloneNode(true));
+            else bottomRect.appendChild(stone.cloneNode(true));
+            stone.remove();
+            eatMode = false;
+            updateGameState();
+            if (!hasStonesOnGrid('top')) endGame('Gray');
+            else if (!hasStonesOnGrid('bottom')) endGame('Blue');
+            else switchPlayer();
+        }
+
+        function hasStonesOnGrid(player) {
+            return Array.from(grid.children).some(square => {
+                const stone = square.querySelector('.stone');
+                return stone && ((player === 'top' && stone.classList.contains('top-stone')) ||
+                                (player === 'bottom' && stone.classList.contains('bottom-stone')));
+            });
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            timeLeft = 30;
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                updateGameState();
+                if (timeLeft <= 0) switchPlayer();
+            }, 1000);
+        }
+
+        function switchPlayer() {
+            clearInterval(timerInterval);
+            currentPlayer = currentPlayer === 'top' ? 'bottom' : 'top';
+            clearHighlights();
+            selectedStone = null;
+            eatMode = false;
+            updateGameState();
+            startTimer();
+        }
+
+        function clearHighlights() {
+            document.querySelectorAll('.highlight').forEach(s => {
+                s.classList.remove('highlight');
+                delete s.dataset.source;
+            });
+            document.querySelectorAll('.selected').forEach(s => s.classList.remove('selected'));
+        }
+
+        function endGame(winner) {
+            clearInterval(timerInterval);
+            if (winner === 'Blue') blueWins++;
+            else grayWins++;
+            gameStarted = false;
+            updateGameState();
+        }
+
+        document.getElementById('surrender').addEventListener('click', () => {
+            if (gameStarted) endGame(currentPlayer === 'top' ? 'Gray' : 'Blue');
+        });
+
+        document.getElementById('reset-game').addEventListener('click', () => {
+            resetGameState();
+            updateGameState();
+            initializeStones();
+        });
+
+        document.getElementById('new-round').addEventListener('click', () => {
+            resetGameState();
+            blueWins = grayWins = 0;
+            updateGameState();
+            initializeStones();
+        });
+
+        function resetGameState() {
+            clearInterval(timerInterval);
+            gridStones = new Array(25).fill(false);
+            topStonesPlaced = bottomStonesPlaced = 0;
+            gameStarted = false;
+            currentPlayer = 'top';
+            timeLeft = 30;
+            selectedStone = null;
+            eatMode = false;
+            grid.querySelectorAll('.stone').forEach(s => s.remove());
+        }
+
+        document.getElementById('eat-stone').addEventListener('click', () => {
+            if (gameStarted) {
+                eatMode = true;
+                document.getElementById('current-player').textContent = 
+                    `Current: ${currentPlayer === 'top' ? 'Blue' : 'Gray'} (Select stone to eat)`;
+            }
+        });
+
+        document.getElementById('extra-turn-blue').addEventListener('click', () => {
+            if (gameStarted) {
+                currentPlayer = 'top';
+                clearHighlights();
+                selectedStone = null;
+                eatMode = false;
+                updateGameState();
+                startTimer();
+            }
+        });
+
+        document.getElementById('extra-turn-gray').addEventListener('click', () => {
+            if (gameStarted) {
+                currentPlayer = 'bottom';
+                clearHighlights();
+                selectedStone = null;
+                eatMode = false;
+                updateGameState();
+                startTimer();
+            }
+        });
+    </script>
+</body>
+</html>
